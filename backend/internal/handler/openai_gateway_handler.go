@@ -894,6 +894,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 			})
 		}
+		if accountRequestWasDisconnected(c.Request.Context()) {
+			submitResponsesUsage(result)
+			return
+		}
 		if err != nil {
 			if result != nil && result.ClientDisconnect {
 				reqLog.Info("openai.client_disconnected",
@@ -1491,6 +1495,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					).Error("openai_messages.record_usage_failed", zap.Error(err))
 				}
 			})
+		}
+		if accountRequestWasDisconnected(c.Request.Context()) {
+			submitMessagesUsage(result)
+			return
 		}
 		if err != nil {
 			if result != nil && result.ImageCount > 0 {
@@ -2369,7 +2377,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
-) (func(), openAISlotAcquireResult) {
+) (release func(), result openAISlotAcquireResult) {
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
 			h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, *streamStarted, false)
@@ -2383,6 +2391,34 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 
 	// 终检与准入后绑定使用选号结果携带的门：composite 等跨分组调度解析出的
 	// 门只存在于调度栈的局部 ctx，必须经选号结果重放到本函数的 ctx 上。
+	finishRequest, beginErr := h.beginOpenAIAccountHTTPRequest(c, selection.Account.ID)
+	if beginErr != nil {
+		if selection.Acquired && selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		if errors.Is(beginErr, service.ErrAccountSchedulingDisabled) {
+			return nil, openAISlotAcquireSchedulingDisabled
+		}
+		writeError(http.StatusServiceUnavailable, "api_error", "", "Account request cancelled")
+		return nil, openAISlotAcquireFailed
+	}
+	defer func() {
+		if result != openAISlotAcquireOK {
+			finishRequest()
+			return
+		}
+		releaseSlot := release
+		var once sync.Once
+		release = func() {
+			once.Do(func() {
+				if releaseSlot != nil {
+					releaseSlot()
+				}
+				finishRequest()
+			})
+		}
+	}()
+
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
 	if selection.Acquired {
@@ -2579,8 +2615,18 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		)
 		return
 	}
+	var finishAccountRequest func()
+	finishTrackedAccount := func() {
+		if finishAccountRequest != nil {
+			finishAccountRequest()
+			finishAccountRequest = nil
+		}
+	}
 	defer func() {
 		_ = wsConn.CloseNow()
+		// Registered before releaseTurnSlots: acknowledge only after slots,
+		// forwarding, and the downstream socket have all finished cleanup.
+		finishTrackedAccount()
 	}()
 	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
 
@@ -2899,6 +2945,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		finishTrackedAccount()
 		reqLog.Debug("openai.websocket_account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
 		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			ctx,
@@ -3000,6 +3047,23 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			selection.Account = latest
 			accountReleaseFunc = fastReleaseFunc
 		}
+		trackedCtx, finish, beginErr := h.gatewayService.BeginAccountRequest(admissionCtx, account.ID,
+			service.AccountRequestWebSocket, func() {
+				pkghttputil.InterruptHTTPResponse(clientLifecycleCtx)
+				_ = wsConn.CloseNow()
+			})
+		if beginErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			if errors.Is(beginErr, service.ErrAccountSchedulingDisabled) {
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+			return
+		}
+		finishAccountRequest = finish
+		admissionCtx = trackedCtx
 		// Close the selection/acquisition race for the first WebSocket turn too.
 		if err := h.gatewayService.CheckAccountScheduling(admissionCtx, account.ID); err != nil {
 			if accountReleaseFunc != nil {
@@ -3290,7 +3354,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if scheduleModel == "" {
 					scheduleModel = turnRequestedModel
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				if !accountRequestWasDisconnected(ctx) {
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				}
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
@@ -3349,6 +3415,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		for {
 			err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks)
+			if accountRequestWasDisconnected(ctx) {
+				reqLog.Info("openai.websocket_admin_disconnected", zap.Int64("account_id", account.ID))
+				return
+			}
 			if err == nil {
 				reqLog.Info("openai.websocket_ingress_closed", zap.Int64("account_id", account.ID))
 				return

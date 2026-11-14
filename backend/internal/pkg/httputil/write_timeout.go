@@ -15,18 +15,23 @@ import (
 // Wrapping below Gin also covers all its ResponseWriter decorators and keeps
 // HTTP/2 deadlines scoped to the individual stream.
 func WithWriteTimeout(next http.Handler, timeout time.Duration) http.Handler {
-	if timeout <= 0 {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
-		writer := &writeTimeoutWriter{ResponseWriter: w, timeout: timeout, cancel: cancel}
+		control := &forceHTTPResponse{controller: http.NewResponseController(w)}
+		defer func() {
+			control.mu.Lock()
+			control.finished = true
+			control.mu.Unlock()
+		}()
+		ctx = context.WithValue(ctx, forceHTTPResponseKey{}, control)
+		writer := &writeTimeoutWriter{ResponseWriter: w, timeout: timeout, cancel: cancel, force: control}
 		next.ServeHTTP(writer, r.WithContext(ctx))
 	})
 }
 
 type writeTimeoutWriter struct {
+	force *forceHTTPResponse
 	http.ResponseWriter
 	timeout time.Duration
 	cancel  context.CancelFunc
@@ -36,6 +41,16 @@ type writeTimeoutWriter struct {
 func (w *writeTimeoutWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (w *writeTimeoutWriter) start() error {
+	if w.force != nil {
+		w.force.mu.Lock()
+		defer w.force.mu.Unlock()
+		if w.force.forced {
+			return context.Canceled
+		}
+	}
+	if w.timeout <= 0 {
+		return w.err
+	}
 	if w.err != nil {
 		return w.err
 	}
@@ -47,7 +62,16 @@ func (w *writeTimeoutWriter) start() error {
 }
 
 func (w *writeTimeoutWriter) finish() {
-	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Time{})
+	if w.force != nil {
+		w.force.mu.Lock()
+		defer w.force.mu.Unlock()
+		if w.force.forced {
+			return
+		}
+	}
+	if w.timeout > 0 {
+		_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Time{})
+	}
 }
 
 func (w *writeTimeoutWriter) fail(err error) {
@@ -98,7 +122,16 @@ func (w *writeTimeoutWriter) FlushError() error {
 func (w *writeTimeoutWriter) Flush() { _ = w.FlushError() }
 
 func (w *writeTimeoutWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return http.NewResponseController(w.ResponseWriter).Hijack()
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil && w.force != nil {
+		w.force.mu.Lock()
+		w.force.hijacked = conn
+		if w.force.forced {
+			_ = conn.Close()
+		}
+		w.force.mu.Unlock()
+	}
+	return conn, rw, err
 }
 
 func (w *writeTimeoutWriter) Push(target string, opts *http.PushOptions) error {
