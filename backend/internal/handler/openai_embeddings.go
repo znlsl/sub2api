@@ -225,6 +225,9 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		}
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 
+		if accountRequestWasDisconnected(c.Request.Context()) {
+			return
+		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
