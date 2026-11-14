@@ -1,3 +1,7 @@
+> **Fork based on official v0.2.21.** The `v0.2.21-drainfix` branch adds scheduling-disable admission checks while allowing already-admitted requests to finish. See [fork behavior and validation notes](FORK_NOTES.md).
+>
+> **本分支基于官方 v0.2.21。** 修复关闭调度后仍接受新请求/旧 WebSocket 后续轮次的问题，已开始的请求正常结束。详见 [二开说明与验证记录](FORK_NOTES.md)。
+
 <div align="center">
 
 <img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
