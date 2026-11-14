@@ -79,7 +79,9 @@ func profitSlotTestContext(t *testing.T, gw *service.OpenAIGatewayService, group
 
 func TestAcquireResponsesAccountSlotProfitRecheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	gw := &service.OpenAIGatewayService{}
+	repo := &admissionGateRepo{}
+	repo.enabled.Store(true)
+	gw := admissionTestGateway(repo)
 	groupID := int64(50)
 
 	newHandler := func(cache *profitCountingConcurrencyCache) *OpenAIGatewayHandler {
