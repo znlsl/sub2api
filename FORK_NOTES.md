@@ -14,11 +14,35 @@ When an operator disables scheduling for an account, new OpenAI gateway requests
 
 ## Scope and limits
 
-The patch covers the shared OpenAI gateway admission paths and their callers, including Responses, Messages, Chat Completions, Embeddings, Images, Alpha Search and the related Grok paths. It does not introduce account-wide force-disconnect or cancellation APIs, change administrative account tests/credential refresh semantics, or change database schemas, billing rules, or quota rules.
+The original graceful-drain patch covers the shared OpenAI gateway admission paths and their callers, including Responses, Messages, Chat Completions, Embeddings, Images, Alpha Search and the related Grok paths. It does not introduce account-wide force-disconnect or cancellation APIs, change administrative account tests/credential refresh semantics, or change database schemas, billing rules, or quota rules.
 
 The admission boundary is the authoritative gate check after slot acquisition. A request that passed that check before disable is already in flight. Idle WebSockets may stay connected, but a new turn is refused while the account remains disabled. Client reconnection behavior belongs to the client.
 
 Each request/turn admission adds one lightweight database lookup by account primary key. This patch does not establish a permanent retirement generation across later account re-enablement.
+
+## Optional force disconnect API
+
+The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly disables scheduling and cancels this instance's OpenAI gateway work, including idle Responses WebSockets. The original scheduling toggle remains graceful. See [ACCOUNT_DISCONNECT_API.md](ACCOUNT_DISCONNECT_API.md) for the contract, completion checks and instance scope.
+
+## Validation of the force-disconnect build (2026-11-14)
+
+The following results were recorded before publication using Linux amd64 (WSL Ubuntu 22.04), Go 1.27.3 and `GOMAXPROCS=4`:
+
+- Targeted disconnect and admission regressions: 4 packages, 36 top-level tests and 115 passes including subtests; no failures.
+- Race detection: 4 packages, 104 top-level tests and 202 passes including subtests; no failures.
+- Full backend `go test -tags unit ./... -count=1`: all 61 packages with tests passed; 12,820 top-level tests and 26,989 passes including subtests, with 41 existing environment-dependent skips. No new targeted tests were skipped and no existing assertions were relaxed.
+- Coverage includes real local HTTP/SSE and Responses WS cancellation, all four WS modes, idle WS sessions, queued requests, pool prewarming/dial cancellation, HTTP/2 stream isolation, asynchronous image task isolation, accurate concurrency accounting, retries selecting another eligible account, and normal graceful drain. Local upstreams were used; these results are not a production traffic replay or a guarantee that the upstream provider stops remote computation.
+- Cross-compiled Linux ARM64 with `CGO_ENABLED=0`, `GOARM64=v8.0`, `-tags embed` and `-trimpath`. The artifact is `0.2.21-drainfix.3-local`, 117,440,672 bytes. All 28 changed Go files and `go.mod`/`go.sum` match the validated build's source SHA-256 manifest. Only these publication notes were updated afterwards.
+
+The force-disconnect ARM64 binary SHA-256 is:
+
+```text
+b02df89937a3ee5b18c0933750e5270ce72842ff0c14e9dd3e6c0d4585ec253b
+```
+
+This binary was built before the follow-up commit, so its embedded commit metadata is `1a1bdf5-dirty`; the `-local` version suffix does not indicate a different code branch. The older `.2-local` artifact lacks the final cancellation and connection-pool fixes and must not be substituted. Tests ran on amd64; this record does not establish an ARM64 test-suite pass or production load testing.
+
+The validation below is retained for the earlier graceful-drain build.
 
 ## Validation of the ARM64 build (2026-11-13)
 

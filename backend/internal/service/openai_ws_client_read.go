@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	coderws "github.com/coder/websocket"
 )
 
@@ -103,6 +104,11 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 		case <-timeoutCh:
 			return closeAndJoin(timeoutStatus, timeoutReason, context.DeadlineExceeded)
 		case <-controlCtx.Done():
+			if errors.Is(pkghttputil.ForceCancellationCause(controlCtx), ErrAccountRequestsDisconnected) {
+				_ = conn.CloseNow()
+				<-readDone
+				return 0, nil, ErrAccountRequestsDisconnected
+			}
 			cause := context.Cause(controlCtx)
 			if errors.Is(cause, ErrOpenAIWSIngressLeaseLost) {
 				return closeAndJoin(

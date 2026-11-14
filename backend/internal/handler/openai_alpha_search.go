@@ -202,6 +202,12 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
 
+		if accountRequestWasDisconnected(c.Request.Context()) {
+			if result != nil {
+				h.recordAlphaSearchUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID)
+			}
+			return
+		}
 		if err == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestedModel, false, result), true, nil)
 			if result != nil {

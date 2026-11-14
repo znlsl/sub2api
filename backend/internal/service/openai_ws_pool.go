@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -555,14 +556,17 @@ func (c *openAIWSConn) closeWith(force bool) {
 	if c == nil {
 		return
 	}
+	// Force the transport before waiting on closeOnce: another goroutine may
+	// already own it while waiting for a peer's graceful close acknowledgment.
+	forced := false
+	if forceCloser, ok := c.ws.(openAIWSForceCloser); ok && force {
+		_ = forceCloser.CloseNow()
+		forced = true
+	}
 	c.closeOnce.Do(func() {
 		close(c.closedCh)
-		if c.ws != nil {
-			if forceCloser, ok := c.ws.(openAIWSForceCloser); ok && force {
-				_ = forceCloser.CloseNow()
-			} else {
-				_ = c.ws.Close()
-			}
+		if c.ws != nil && !forced {
+			_ = c.ws.Close()
 		}
 		select {
 		case c.leaseCh <- struct{}{}:
@@ -809,6 +813,7 @@ type openAIWSAccountPool struct {
 	lastCleanupAt time.Time
 	lastAcquire   *openAIWSAcquireRequest
 	prewarmActive bool
+	prewarmCancel context.CancelCauseFunc
 	prewarmUntil  time.Time
 	prewarmFails  int
 	prewarmFailAt time.Time
@@ -1414,18 +1419,28 @@ retryAcquire:
 
 		ap = p.getOrCreateAccountPool(accountID)
 		ap.mu.Lock()
-		ap.creating--
 		if ap.generation != acquireGeneration {
-			ap.signalChangedLocked()
 			ap.mu.Unlock()
 			if conn != nil {
-				conn.close()
+				if pkghttputil.ForceCancellationCause(ctx) != nil {
+					conn.abort()
+				} else {
+					conn.close()
+				}
+			}
+			ap.mu.Lock()
+			ap.creating--
+			ap.signalChangedLocked()
+			ap.mu.Unlock()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
 			if retry < 1 {
 				return p.acquire(ctx, req, retry+1, queueWait)
 			}
 			return nil, errOpenAIWSConnClosed
 		}
+		ap.creating--
 		if dialErr != nil {
 			ap.prewarmFails++
 			ap.prewarmFailAt = time.Now()
@@ -1936,84 +1951,123 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 	if len(generations) > 0 {
 		generation = generations[0]
 	}
+	ap, ok := p.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return
+	}
+	force, abort := context.WithCancelCause(context.Background())
 	staleTarget := false
+	remaining := total
 	defer func() {
-		if ap, ok := p.getAccountPool(accountID); ok && ap != nil {
-			ap.mu.Lock()
-			ap.prewarmActive = false
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-		}
+		ap.mu.Lock()
+		// Reservations include dials not yet started. Abort must release those
+		// too, without initiating another connection for a disabled account.
+		ap.creating -= min(remaining, ap.creating)
+		ap.prewarmActive = false
+		ap.prewarmCancel = nil
+		ap.signalChangedLocked()
+		ap.mu.Unlock()
 		if staleTarget {
-			// A newer acquire arrived while the old dial was in flight. Re-run
-			// target selection only after clearing prewarmActive so the latest
-			// beta/hint target can fill the idle budget.
 			p.ensureTargetIdleAsync(accountID)
 		}
 	}()
+	ap.mu.Lock()
+	if ap.generation != generation {
+		ap.mu.Unlock()
+		return
+	}
+	ap.prewarmCancel = abort
+	ap.mu.Unlock()
 
 	for i := 0; i < total; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)
+		ap.mu.Lock()
+		obsolete := ap.generation != generation
+		ap.mu.Unlock()
+		if obsolete || force.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(pkghttputil.WithForceCancellation(force, force), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)
 		conn, err := p.dialConn(ctx, req)
 		cancel()
 
-		ap, ok := p.getAccountPool(accountID)
-		if !ok || ap == nil {
-			if conn != nil {
+		ap.mu.Lock()
+		stale := ap.generation != generation || ap.lastAcquire == nil || force.Err() != nil
+		if err == nil && !stale && !sameOpenAIWSPrewarmTarget(req, *ap.lastAcquire) {
+			staleTarget = true
+			stale = true
+		}
+		if err == nil && !stale && len(ap.conns) >= p.effectiveMaxConnsByAccount(req.Account) {
+			stale = true
+		}
+		if conn != nil && stale {
+			// Keep creating nonzero until the obsolete transport is closed.
+			ap.mu.Unlock()
+			if force.Err() != nil {
+				conn.abort()
+			} else {
 				conn.close()
 			}
-			return
+			ap.mu.Lock()
 		}
-		ap.mu.Lock()
 		if ap.creating > 0 {
 			ap.creating--
 		}
+		remaining--
 		if err != nil {
-			ap.prewarmFails++
-			ap.prewarmFailAt = time.Now()
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			continue
+			if force.Err() == nil {
+				ap.prewarmFails++
+				ap.prewarmFailAt = time.Now()
+			}
+		} else if !stale {
+			ap.conns[conn.id] = conn
+			ap.prewarmFails = 0
+			ap.prewarmFailAt = time.Time{}
 		}
-		if ap.generation != generation || ap.lastAcquire == nil {
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		if !sameOpenAIWSPrewarmTarget(req, *ap.lastAcquire) {
-			staleTarget = true
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		if len(ap.conns) >= p.effectiveMaxConnsByAccount(req.Account) {
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		ap.conns[conn.id] = conn
-		ap.prewarmFails = 0
-		ap.prewarmFailAt = time.Time{}
 		ap.signalChangedLocked()
 		ap.mu.Unlock()
 	}
+}
+
+// AccountConnectionCount includes pending dials so an abort receipt cannot
+// claim completion while a background prewarm still owns a transport.
+func (p *openAIWSConnPool) AccountConnectionCount(accountID int64) int {
+	if p == nil {
+		return 0
+	}
+	ap, ok := p.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return 0
+	}
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	return len(ap.conns) + ap.creating
 }
 
 // ClearAccount closes all pooled connections and discards delayed prewarm
 // state for one account. The generation guard prevents an in-flight prewarm
 // started before credential recovery from re-entering the pool afterwards.
 func (p *openAIWSConnPool) ClearAccount(accountID int64) {
+	p.clearAccount(accountID, false)
+}
+
+// AbortAccount terminates only this account's connections without close-handshake waits.
+func (p *openAIWSConnPool) AbortAccount(accountID int64) int {
+	return p.clearAccount(accountID, true)
+}
+
+func (p *openAIWSConnPool) clearAccount(accountID int64, force bool) int {
 	if p == nil || accountID <= 0 {
-		return
+		return 0
 	}
 	ap, ok := p.getAccountPool(accountID)
 	if !ok || ap == nil {
-		return
+		return 0
 	}
 	ap.mu.Lock()
 	ap.generation++
+	if force && ap.prewarmCancel != nil {
+		ap.prewarmCancel(ErrAccountRequestsDisconnected)
+	}
 	conns := make([]*openAIWSConn, 0, len(ap.conns))
 	for id, conn := range ap.conns {
 		delete(ap.conns, id)
@@ -2028,7 +2082,14 @@ func (p *openAIWSConnPool) ClearAccount(accountID int64) {
 	ap.prewarmFailAt = time.Time{}
 	ap.signalChangedLocked()
 	ap.mu.Unlock()
-	closeOpenAIWSConns(conns)
+	if force {
+		for _, conn := range conns {
+			conn.abort()
+		}
+	} else {
+		closeOpenAIWSConns(conns)
+	}
+	return len(conns)
 }
 
 // dropDeadConnLocked 在池锁内把已关闭或已判脏的连接移出账号池并释放容量，
