@@ -29,7 +29,7 @@ func DetachUpstreamContext(ctx context.Context, timeout ...time.Duration) contex
 	if len(timeout) > 0 && timeout[0] > 0 {
 		policy.timeout = timeout[0]
 	}
-	return context.WithValue(context.WithoutCancel(ctx), upstreamDrainKey{}, policy)
+	return context.WithValue(detachExceptForce(ctx), upstreamDrainKey{}, policy)
 }
 
 // NewUpstreamAttemptContext starts a total drain budget when the original client

@@ -272,7 +272,7 @@ func newAsyncImageContext(c *gin.Context, body []byte, timeoutDuration time.Dura
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	base := context.WithoutCancel(retained)
+	base := pkghttputil.WithoutHTTPResponseInterrupt(context.WithoutCancel(retained))
 	executionCtx, cancelExecution := context.WithTimeout(base, timeoutDuration)
 	cancel := func() {
 		cancelExecution()
