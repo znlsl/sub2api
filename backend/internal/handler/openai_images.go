@@ -269,7 +269,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardImages(requestCtx, c, account, body, parsed, channelMapping.MappedModel)
+			attemptCtx := service.WithOpenAIImageSizeRouting(service.WithOpenAIImagesEndpoint(service.WithOpenAIImageGenerationIntent(c.Request.Context())), parsed.Size)
+			return h.gatewayService.ForwardImages(attemptCtx, c, account, body, parsed, channelMapping.MappedModel)
 		}()
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
@@ -281,7 +282,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
-		if err != nil {
+		disconnected := accountRequestWasDisconnected(c.Request.Context())
+		if disconnected && (result == nil || result.ImageCount <= 0) {
+			return
+		}
+		if err != nil && !disconnected {
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai.images.forward_partial_error_with_image_result",
 					zap.Int64("account_id", account.ID),
@@ -393,7 +398,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), true, result.FirstTokenMs)
+			if !disconnected {
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), true, result.FirstTokenMs)
+			}
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), true, nil)
 		}

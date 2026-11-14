@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -140,6 +141,19 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		opts.HTTPClient = proxyClient
 	}
 
+	// Retain the upgraded transport so force close can bypass an in-progress
+	// coder/websocket graceful handshake. Reuse the original HTTP transport.
+	client := opts.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	forceClient := *client
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	forceClient.Transport = &openAIWSForceCloseTransport{base: transport, owner: wrapped}
+	opts.HTTPClient = &forceClient
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)
 	if err != nil {
 		status := 0
@@ -163,6 +177,9 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		respHeaders = cloneHeader(resp.Header)
 	}
 	wrapped.conn = conn
+	wrapped.forceWatchMu.Lock()
+	wrapped.stopForceWatch = pkghttputil.AfterForceCancellation(ctx, func() { _ = wrapped.CloseNow() })
+	wrapped.forceWatchMu.Unlock()
 	return wrapped, 0, respHeaders, nil
 }
 
@@ -288,9 +305,35 @@ func (d *coderOpenAIWSClientDialer) SnapshotTransportMetrics() OpenAIWSTransport
 	}
 }
 
+type openAIWSForceCloseTransport struct {
+	base  http.RoundTripper
+	owner *coderOpenAIWSClientConn
+}
+
+func (t *openAIWSForceCloseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp != nil && resp.StatusCode == http.StatusSwitchingProtocols {
+		t.owner.transport = resp.Body
+	}
+	return resp, err
+}
+
 type coderOpenAIWSClientConn struct {
-	conn          *coderws.Conn
-	upstreamPings atomic.Int64
+	forceWatchMu   sync.Mutex
+	stopForceWatch func() bool
+	transport      io.Closer
+	forceOnce      sync.Once
+	conn           *coderws.Conn
+	upstreamPings  atomic.Int64
+}
+
+func (c *coderOpenAIWSClientConn) stopForceCancellationWatch() {
+	c.forceWatchMu.Lock()
+	defer c.forceWatchMu.Unlock()
+	if c.stopForceWatch != nil {
+		c.stopForceWatch()
+		c.stopForceWatch = nil
+	}
 }
 
 func (c *coderOpenAIWSClientConn) UpstreamPingCount() int64 {
@@ -383,6 +426,7 @@ func (c *coderOpenAIWSClientConn) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+	defer c.stopForceCancellationWatch()
 	// Close 为幂等，忽略重复关闭错误。
 	_ = c.conn.Close(coderws.StatusNormalClosure, "")
 	_ = c.conn.CloseNow()
@@ -393,6 +437,12 @@ func (c *coderOpenAIWSClientConn) CloseNow() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
+	defer c.stopForceCancellationWatch()
+	c.forceOnce.Do(func() {
+		if c.transport != nil {
+			_ = c.transport.Close()
+		}
+	})
 	_ = c.conn.CloseNow()
 	return nil
 }
