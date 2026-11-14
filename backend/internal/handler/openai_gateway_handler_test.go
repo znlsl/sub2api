@@ -1931,6 +1931,7 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 }
 
 type openAIResponsesWSUsageLogCase struct {
+	schedulingEnabled      *atomic.Bool
 	simpleModeRejectAtRead int64
 	compositeResolver      *service.CompositeRouteResolver
 	accountPlatform        string
@@ -1973,7 +1974,18 @@ type openAIResponsesWSUsageLogResult struct {
 
 type openAIWSUsageHandlerAccountRepoStub struct {
 	service.AccountRepository
-	account service.Account
+	schedulingEnabled *atomic.Bool
+	account           service.Account
+}
+
+func (s *openAIWSUsageHandlerAccountRepoStub) IsAccountSchedulingEnabled(ctx context.Context, id int64) (bool, error) {
+	if s.account.ID != id {
+		return false, nil
+	}
+	if s.schedulingEnabled != nil {
+		return s.schedulingEnabled.Load(), nil
+	}
+	return s.account.Schedulable && s.account.IsActive(), nil
 }
 
 func (s *openAIWSUsageHandlerAccountRepoStub) ListSchedulableByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
@@ -3078,7 +3090,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
-	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account}
+	accountRepo := &openAIWSUsageHandlerAccountRepoStub{account: account, schedulingEnabled: tc.schedulingEnabled}
 	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, turnCount)}
 
 	if len(tc.channelMapping) > 0 {
