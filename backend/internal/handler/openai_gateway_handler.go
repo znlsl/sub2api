@@ -81,7 +81,7 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 }
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
-	return err != nil && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
+	return err != nil && !isOpenAIAccountAdmissionError(err) && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch) && !service.IsOpenAIWSSessionPreemptedError(err)
 }
 
 // openAIWSIngressEndedByClient reports whether a finished ingress WebSocket turn
@@ -794,6 +794,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireSchedulingDisabled {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1397,6 +1401,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireSchedulingDisabled {
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -2171,7 +2179,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesUserSlot(
 	return wrapReleaseOnDone(ctx, userReleaseFunc), true
 }
 
-// openAISlotAcquireResult 是账号槽位获取的三态结果。
+// openAISlotAcquireResult describes terminal admission after acquiring a slot.
 type openAISlotAcquireResult int
 
 const (
@@ -2182,6 +2190,9 @@ const (
 	// 未写任何响应；调用方应经 recordOpenAIProfitVeto 把该账号加入本请求排除集
 	// 后重新选号，全池耗尽由下一轮选号返回标准 no available accounts。
 	openAISlotAcquireProfitVetoed
+	// The account was disabled after selection; its slot is released. Reselect
+	// without an upstream attempt or an account health penalty.
+	openAISlotAcquireSchedulingDisabled
 )
 
 // openAIWSTurnPricing 持有 WebSocket 连接内「当前 turn」的计费定价时刻。
@@ -2378,6 +2389,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
 	if selection.Acquired {
+		if result := h.checkOpenAIAccountAdmission(ctx, account.ID, selection.ReleaseFunc, reqLog, writeError); result != openAISlotAcquireOK {
+			return nil, result
+		}
 		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
 		if vetoed {
 			if selection.ReleaseFunc != nil {
@@ -2415,6 +2429,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		return nil, openAISlotAcquireFailed
 	}
 	if fastAcquired {
+		if result := h.checkOpenAIAccountAdmission(ctx, account.ID, fastReleaseFunc, reqLog, writeError); result != openAISlotAcquireOK {
+			return nil, result
+		}
 		// 分组利润控制：快速抢槽成功后终检。选号与抢槽之间账号
 		// 倍率可能刷新，越线则释放槽位交由调用方排除重选，不绑定粘连。
 		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
@@ -2471,6 +2488,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 
 	// Slot acquired: no longer waiting in queue.
 	releaseWait()
+	if result := h.checkOpenAIAccountAdmission(ctx, account.ID, accountReleaseFunc, reqLog, writeError); result != openAISlotAcquireOK {
+		return nil, result
+	}
 	// 分组利润控制：WaitPlan 排队成功后终检。排队期间账号倍率
 	// 可能上调，越线则释放槽位交由调用方排除重选，不绑定粘连。
 	latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
@@ -2994,6 +3014,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			selection.Account = latest
 			accountReleaseFunc = fastReleaseFunc
 		}
+		// Close the selection/acquisition race for the first WebSocket turn too.
+		if err := h.gatewayService.CheckAccountScheduling(admissionCtx, account.ID); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			if errors.Is(err, service.ErrAccountSchedulingDisabled) {
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+			reqLog.Warn("openai.websocket_admission_check_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "unable to verify account scheduling state, please reconnect")
+			return
+		}
 		// 准入完成：门并入连接 ctx，turn 级复核与 failover 重选共用。
 		ctx = admissionCtx
 		// Account selection starts a fresh upstream attempt. Clear any model
@@ -3186,6 +3219,22 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						userReleaseFunc()
 					}
 					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account is busy, please retry later", nil)
+				}
+				// A persistent connection is not permission to start another request.
+				// Check after acquiring both slots, so disable can drain admitted work.
+				if err := h.gatewayService.CheckAccountScheduling(ctx, account.ID); err != nil {
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
+					if userReleaseFunc != nil {
+						userReleaseFunc()
+					}
+					reqLog.Info("openai.websocket_turn_admission_rejected", zap.Int("turn", turn), zap.Int64("account_id", account.ID), zap.Error(err))
+					reason := "account is no longer schedulable, please reconnect"
+					if !errors.Is(err, service.ErrAccountSchedulingDisabled) {
+						reason = "unable to verify account scheduling state, please reconnect"
+					}
+					return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, reason, err)
 				}
 				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
 				currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
@@ -3386,6 +3435,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 			var closeErr *service.OpenAIWSClientCloseError
 			hasClientCloseErr := errors.As(err, &closeErr)
+			if isOpenAIAccountAdmissionError(err) {
+				// Operator disable/read failure is not an upstream account fault.
+				reqLog.Info("openai.websocket_admission_closed", zap.Int64("account_id", account.ID), zap.Error(err))
+				if hasClientCloseErr {
+					closeOpenAIClientWS(wsConn, closeErr.StatusCode(), closeErr.Reason())
+				} else {
+					closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "account admission refused, please reconnect")
+				}
+				return
+			}
 			if openAIWSIngressEndedByClient(err) {
 				closedFields := []zap.Field{zap.Int64("account_id", account.ID)}
 				if hasClientCloseErr {
