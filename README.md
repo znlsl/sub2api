@@ -1,6 +1,6 @@
-> **Fork based on official v0.2.21.** The `v0.2.21-drainfix` branch adds scheduling-disable admission checks while allowing already-admitted requests to finish. See [fork behavior and validation notes](FORK_NOTES.md).
+> **Fork based on official v0.2.22.** The `v0.2.22-drainfix` branch carries the scheduling-disable admission checks and the optional account-scoped disconnect API. The scheduling toggle still lets admitted work finish. See [fork behavior](FORK_NOTES.md) and [v0.2.22 port validation](V0.2.22_PORT_VALIDATION.md).
 >
-> **本分支基于官方 v0.2.21。** 修复关闭调度后仍接受新请求/旧 WebSocket 后续轮次的问题，已开始的请求正常结束。详见 [二开说明与验证记录](FORK_NOTES.md)。
+> **本分支基于官方 v0.2.22。** 保留关闭调度后的新请求/WS 后续轮次准入检查，以及独立的按账号强断接口；普通调度开关仍允许已准入工作完成。详见 [二开说明](FORK_NOTES.md) 与 [0.2.22 移植验证](V0.2.22_PORT_VALIDATION.md)。
 
 <div align="center">
 

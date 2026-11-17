@@ -1,6 +1,6 @@
-# Sub2API v0.2.21 fork: scheduling disable and graceful drain
+# Sub2API v0.2.22 fork: scheduling disable and account disconnect
 
-This fork's `v0.2.21-drainfix` branch is based on the official `v0.2.21` tag at commit `10ba8f9b4dc2e6023d4a9879ab77b21841babd10`. It does not merge later upstream main changes. The first patch corresponds to the Linux ARM64 build identified as `0.2.21-drainfix.1`.
+This fork's `v0.2.22-drainfix` branch is based on the official `v0.2.22` tag at commit `b0fa9f3e6eeab1968a53e1289b69daa4bb40ca2b`. The two patches were cherry-picked from `v0.2.21-drainfix` without production implementation changes or text conflicts; later upstream main commits are not included. The `v0.2.21-drainfix` branch remains the separate baseline for the existing v0.2.21 builds.
 
 ## Behavior
 
@@ -24,7 +24,13 @@ Each request/turn admission adds one lightweight database lookup by account prim
 
 The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly disables scheduling and cancels this instance's OpenAI gateway work, including idle Responses WebSockets. The original scheduling toggle remains graceful. See [ACCOUNT_DISCONNECT_API.md](ACCOUNT_DISCONNECT_API.md) for the contract, completion checks and instance scope.
 
-## Validation of the force-disconnect build (2026-11-14)
+## Current v0.2.22 validation (2026-11-17)
+
+See [V0.2.22_PORT_VALIDATION.md](V0.2.22_PORT_VALIDATION.md) for the Go 1.27.4 test results, the added pre-output keepalive cancellation regressions, ARM64 compilation scope, and upstream migration considerations. The API contract is unchanged.
+
+The remaining build records below are historical v0.2.21 records. Their version strings, binary hashes and test totals do not describe a v0.2.22 release artifact.
+
+## Historical v0.2.21 force-disconnect build (2026-11-14)
 
 The following results were recorded before publication using Linux amd64 (WSL Ubuntu 22.04), Go 1.27.3 and `GOMAXPROCS=4`:
 
@@ -44,7 +50,7 @@ This binary was built before the follow-up commit, so its embedded commit metada
 
 The validation below is retained for the earlier graceful-drain build.
 
-## Validation of the ARM64 build (2026-11-13)
+## Historical v0.2.21 graceful-drain ARM64 build (2026-11-13)
 
 - Built natively for Linux ARM64 with Go 1.27.3, `CGO_ENABLED=0`, `GOARM64=v8.0`, and embedded frontend assets (`-tags embed`).
 - Targeted service, handler and repository regressions passed. Cases include selected/fast/queued HTTP admission, lookup failures, already-admitted work, account re-enablement, and both WebSocket modes completing turn one while refusing turn two after disable.
