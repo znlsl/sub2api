@@ -1,6 +1,6 @@
-# 账号强制断开接口（v0.2.21-drainfix）
+# 账号强制断开接口（v0.2.22-drainfix）
 
-本功能在官方 v0.2.21 + 原有关闭调度补丁上增加一个管理员接口。原有 `POST /api/v1/admin/accounts/:id/schedulable` 仍然只停止新请求和 WS 后续轮次，允许已经准入的工作完成。
+本分支在官方 v0.2.22 上保留来自 v0.2.21-drainfix 的两个补丁，以下强断接口的请求、返回及范围均保持不变。原有 `POST /api/v1/admin/accounts/:id/schedulable` 仍然只停止新请求和 WS 后续轮次，允许已经准入的工作完成。
 
 ## 调用
 
@@ -89,4 +89,4 @@ go test -race -tags unit ./internal/pkg/httputil ./internal/service ./internal/h
   -run 'Test(AccountDisconnect|AccountRequestRegistry|Force|OpenAIWSConnPoolAbortAccount)' -count=1
 ```
 
-2026-11-14 实际执行的专项、竞态、全后端单元测试和 ARM64 编译结果见 [FORK_NOTES.md](FORK_NOTES.md#validation-of-the-force-disconnect-build-2026-11-14)。原始日志、完整覆盖矩阵和源码哈希仍保留在本地 `artifacts/force-disconnect-review-20261114/`，不随源码发布。对应产物为 `.3-local`；旧的 `.2-local` 构建不包含最后一轮补强。
+本分支 2026-11-17 的实际移植验证结果见 [V0.2.22_PORT_VALIDATION.md](V0.2.22_PORT_VALIDATION.md)。[FORK_NOTES.md](FORK_NOTES.md) 中的 2026-11-14 构建记录和 `.3-local` 二进制属于旧 v0.2.21 分支，不能作为 v0.2.22 的发布产物；旧 `.2-local` 还缺少最后一轮取消补强。原始测试日志和构建文件仅保存在本地，不随源码发布。
