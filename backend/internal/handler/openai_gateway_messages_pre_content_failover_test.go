@@ -231,7 +231,9 @@ func TestOpenAIMessagesSlotAcquireFailureAfterKeepaliveIsSSE(t *testing.T) {
 	require.NoError(t, err)
 	streamStarted := true
 
-	h := &OpenAIGatewayHandler{}
+	// Slot acquisition now registers work before checking the wait plan.
+	// Production injects the gateway; this isolated failure-path fixture needs it too.
+	h := &OpenAIGatewayHandler{gatewayService: &service.OpenAIGatewayService{}}
 	selection := &service.AccountSelectionResult{Account: &service.Account{ID: 9201}}
 	_, result := h.acquireResponsesAccountSlot(c, nil, "", selection, true, &streamStarted, zap.NewNop())
 
