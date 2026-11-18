@@ -1,6 +1,6 @@
-# 账号强制断开接口（v0.2.22-drainfix）
+# 账号强制断开接口（v0.2.23-drainfix）
 
-本分支在官方 v0.2.22 上保留来自 v0.2.21-drainfix 的两个补丁，以下强断接口的请求、返回及范围均保持不变。原有 `POST /api/v1/admin/accounts/:id/schedulable` 仍然只停止新请求和 WS 后续轮次，允许已经准入的工作完成。
+本分支在官方 v0.2.23 上保留来自 v0.2.21-drainfix、已在 v0.2.22-drainfix 验证的两个补丁，以下强断接口的请求、返回及范围均保持不变。原有 `POST /api/v1/admin/accounts/:id/schedulable` 仍然只停止新请求和 WS 后续轮次，允许已经准入的工作完成。
 
 ## 调用
 

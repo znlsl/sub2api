@@ -1,6 +1,6 @@
-# Sub2API v0.2.22 fork: scheduling disable and account disconnect
+# Sub2API v0.2.23 fork: scheduling disable and account disconnect
 
-This fork's `v0.2.22-drainfix` branch is based on the official `v0.2.22` tag at commit `b0fa9f3e6eeab1968a53e1289b69daa4bb40ca2b`. The two patches were cherry-picked from `v0.2.21-drainfix` without production implementation changes or text conflicts; later upstream main commits are not included. The `v0.2.21-drainfix` branch remains the separate baseline for the existing v0.2.21 builds.
+This fork's `v0.2.23-drainfix` branch is based exactly on the official `v0.2.23` tag at commit `5af9afb588c4b014b3df9db7d4073af1f8ae01b6`. The two production patches and regression tests were cherry-picked from `v0.2.22-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The `v0.2.21-drainfix` and `v0.2.22-drainfix` branches remain separate and unchanged.
 
 ## Behavior
 
@@ -24,7 +24,11 @@ Each request/turn admission adds one lightweight database lookup by account prim
 
 The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly disables scheduling and cancels this instance's OpenAI gateway work, including idle Responses WebSockets. The original scheduling toggle remains graceful. See [ACCOUNT_DISCONNECT_API.md](ACCOUNT_DISCONNECT_API.md) for the contract, completion checks and instance scope.
 
-## Current v0.2.22 validation (2026-11-17)
+## Current v0.2.23 validation (2026-11-18)
+
+See [V0.2.23_PORT_VALIDATION.md](V0.2.23_PORT_VALIDATION.md) for the upstream comparison, test results and deployment limits. The API contract is unchanged. All build hashes and test results below are historical; they do not describe the current release.
+
+## Historical v0.2.22 validation (2026-11-17)
 
 See [V0.2.22_PORT_VALIDATION.md](V0.2.22_PORT_VALIDATION.md) for the Go 1.27.4 test results, the added pre-output keepalive cancellation regressions, ARM64 compilation scope, and upstream migration considerations. The API contract is unchanged.
 
