@@ -1,6 +1,6 @@
-# Sub2API v0.2.23 fork: scheduling disable and account disconnect
+# Sub2API v0.2.24 fork: scheduling disable and account disconnect
 
-This fork's `v0.2.23-drainfix` branch is based exactly on the official `v0.2.23` tag at commit `5af9afb588c4b014b3df9db7d4073af1f8ae01b6`. The two production patches and regression tests were cherry-picked from `v0.2.22-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The `v0.2.21-drainfix` and `v0.2.22-drainfix` branches remain separate and unchanged.
+This fork's `v0.2.24-drainfix` branch is based exactly on the official `v0.2.24` tag at commit `5c2982a81b46e2142d0143d2f83c1ce9c4da1d24`. The two production patches and regression tests were cherry-picked from `v0.2.23-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The v0.2.21, v0.2.22 and v0.2.23 fork branches remain separate and unchanged.
 
 ## Behavior
 
@@ -24,7 +24,11 @@ Each request/turn admission adds one lightweight database lookup by account prim
 
 The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly disables scheduling and cancels this instance's OpenAI gateway work, including idle Responses WebSockets. The original scheduling toggle remains graceful. See [ACCOUNT_DISCONNECT_API.md](ACCOUNT_DISCONNECT_API.md) for the contract, completion checks and instance scope.
 
-## Current v0.2.23 validation (2026-11-18)
+## Current v0.2.24 validation (2026-11-21)
+
+See [V0.2.24_PORT_VALIDATION.md](V0.2.24_PORT_VALIDATION.md) for the upstream comparison, exact tests and release limits. The API contract is unchanged. This port retains upstream duplicate-field validation, 408 failover and OAuth/scheduler updates. The build records below are historical and do not identify the current binary.
+
+## Historical v0.2.23 validation (2026-11-18)
 
 See [V0.2.23_PORT_VALIDATION.md](V0.2.23_PORT_VALIDATION.md) for the upstream comparison, test results and deployment limits. The API contract is unchanged. All build hashes and test results below are historical; they do not describe the current release.
 
