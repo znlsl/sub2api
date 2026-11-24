@@ -194,6 +194,7 @@ func newDisconnectHandler(t *testing.T, upstreamURL, mode string, options ...dis
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyAPIKey), key)
+		c.Request = c.Request.WithContext(service.WithHeaderOverrideRequestScope(c.Request.Context(), key.User.ID, key.ID, key.GroupID))
 		userConcurrency := 1
 		if opts.backup {
 			userConcurrency = 3

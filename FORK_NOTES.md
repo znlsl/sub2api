@@ -1,6 +1,6 @@
-# Sub2API v0.2.24 fork: scheduling disable and account disconnect
+# Sub2API v0.2.25 fork: scheduling disable and account disconnect
 
-This fork's `v0.2.24-drainfix` branch is based exactly on the official `v0.2.24` tag at commit `5c2982a81b46e2142d0143d2f83c1ce9c4da1d24`. The two production patches and regression tests were cherry-picked from `v0.2.23-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The v0.2.21, v0.2.22 and v0.2.23 fork branches remain separate and unchanged.
+This fork's `v0.2.25-drainfix` branch is based exactly on the official `v0.2.25` tag at commit `348997267d756eab5729bb6b78a275a15d18796a`. The two production patches and regression tests were cherry-picked from `v0.2.24-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The v0.2.21, v0.2.22, v0.2.23 and v0.2.24 fork branches remain separate and unchanged.
 
 ## Behavior
 
@@ -24,7 +24,11 @@ Each request/turn admission adds one lightweight database lookup by account prim
 
 The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly disables scheduling and cancels this instance's OpenAI gateway work, including idle Responses WebSockets. The original scheduling toggle remains graceful. See [ACCOUNT_DISCONNECT_API.md](ACCOUNT_DISCONNECT_API.md) for the contract, completion checks and instance scope.
 
-## Current v0.2.24 validation (2026-11-21)
+## Current v0.2.25 validation (2026-11-24)
+
+See [V0.2.25_PORT_VALIDATION.md](V0.2.25_PORT_VALIDATION.md) for the source comparison, actual test results and known upstream test/race findings. This port retains identity header variables, WS identity isolation, group metadata synchronization, structured passthrough errors and compact retryable error codes. Core admission/disconnect race checks and all listed backend unit tests pass. Expanded race checks are not entirely green: two independent upstream race categories reproduce on the unmodified official tag. No upstream production code was changed to hide them. A stale frontend layout assertion was updated to match the new official markup, without altering the page.
+
+## Historical v0.2.24 validation (2026-11-21)
 
 See [V0.2.24_PORT_VALIDATION.md](V0.2.24_PORT_VALIDATION.md) for the upstream comparison, exact tests and release limits. The API contract is unchanged. This port retains upstream duplicate-field validation, 408 failover and OAuth/scheduler updates. The build records below are historical and do not identify the current binary.
 
