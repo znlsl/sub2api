@@ -1955,7 +1955,6 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 	if !ok || ap == nil {
 		return
 	}
-	force, abort := context.WithCancelCause(context.Background())
 	staleTarget := false
 	remaining := total
 	defer func() {
@@ -1976,6 +1975,7 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 		ap.mu.Unlock()
 		return
 	}
+	force, abort := context.WithCancelCause(context.Background())
 	ap.prewarmCancel = abort
 	ap.mu.Unlock()
 

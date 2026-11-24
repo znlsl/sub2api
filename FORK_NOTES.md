@@ -1,6 +1,6 @@
 # Sub2API v0.2.25 fork: scheduling disable and account disconnect
 
-This fork's `v0.2.25-drainfix` branch is based exactly on the official `v0.2.25` tag at commit `348997267d756eab5729bb6b78a275a15d18796a`. The two production patches and regression tests were cherry-picked from `v0.2.24-drainfix`; the production patch IDs are identical and there were no text conflicts. Later upstream main commits are not included. The v0.2.21, v0.2.22, v0.2.23 and v0.2.24 fork branches remain separate and unchanged.
+This fork's `v0.2.25-drainfix` branch is based exactly on the official `v0.2.25` tag at commit `348997267d756eab5729bb6b78a275a15d18796a`. The two production patches and regression tests were cherry-picked from `v0.2.24-drainfix`; the original production patch IDs are identical and there were no text conflicts. A separate follow-up moves prewarm cancellation allocation after its generation check, resolving a full-vet lostcancel finding without changing connection lifetime. Later upstream main commits are not included. The v0.2.21, v0.2.22, v0.2.23 and v0.2.24 fork branches remain separate and unchanged.
 
 ## Behavior
 
@@ -26,7 +26,7 @@ The follow-up adds `POST /api/v1/admin/accounts/:id/disconnect`. It explicitly d
 
 ## Current v0.2.25 validation (2026-11-24)
 
-See [V0.2.25_PORT_VALIDATION.md](V0.2.25_PORT_VALIDATION.md) for the source comparison, actual test results and known upstream test/race findings. This port retains identity header variables, WS identity isolation, group metadata synchronization, structured passthrough errors and compact retryable error codes. Core admission/disconnect race checks and all listed backend unit tests pass. Expanded race checks are not entirely green: two independent upstream race categories reproduce on the unmodified official tag. No upstream production code was changed to hide them. A stale frontend layout assertion was updated to match the new official markup, without altering the page.
+See [V0.2.25_PORT_VALIDATION.md](V0.2.25_PORT_VALIDATION.md) for the source comparison, actual test results and known upstream test/race findings. This port retains identity header variables, WS identity isolation, group metadata synchronization, structured passthrough errors and compact retryable error codes. Core admission/disconnect race checks and all listed backend unit tests pass. Expanded race checks are not entirely green: two independent upstream race categories reproduce on the unmodified official tag. No upstream production code was changed to hide them. Full static analysis also identified an early-return path before prewarm cancellation ownership was transferred to the pool; allocation now occurs only after that generation check, with a real-socket regression proving completed prewarms remain usable and can later be aborted. A stale frontend layout assertion was updated to match the new official markup, without altering the page.
 
 ## Historical v0.2.24 validation (2026-11-21)
 

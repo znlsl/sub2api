@@ -113,3 +113,63 @@ func TestAccountDisconnectV025ReportedIdentityConnections(t *testing.T) {
 	echo(reopened, 7)
 	require.NoError(t, ctx.Err())
 }
+
+// A completed prewarm transfers its socket into the pool. Ending the prewarm
+// task must not cancel that healthy socket; a later account abort still must.
+func TestAccountDisconnectV025CompletedPrewarmRemainsUsable(t *testing.T) {
+	stopped := make(chan struct{}, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.CloseNow()
+		defer func() { stopped <- struct{}{} }()
+		for {
+			kind, payload, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			if err := conn.Write(r.Context(), kind, payload); err != nil {
+				return
+			}
+		}
+	}))
+	defer upstream.Close()
+	svc, _, _ := disconnectService(t)
+	svc.cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	svc.cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	pool := svc.getOpenAIWSConnPool()
+	defer pool.AbortAccount(1)
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	req := openAIWSAcquireRequest{Account: account, WSURL: "ws" + strings.TrimPrefix(upstream.URL, "http")}
+	ap := pool.getOrCreateAccountPool(1)
+	ap.mu.Lock()
+	ap.lastAcquire = &req
+	ap.creating = 1
+	ap.prewarmActive = true
+	generation := ap.generation
+	ap.mu.Unlock()
+	pool.prewarmConns(1, req, 1, generation)
+	require.Equal(t, 1, pool.AccountConnectionCount(1))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lease, err := pool.Acquire(ctx, req)
+	require.NoError(t, err)
+	defer lease.Release()
+	require.True(t, lease.Reused(), "completed prewarm must leave its established connection reusable")
+	require.NoError(t, lease.WriteJSONContext(ctx, map[string]string{"message": "after-prewarm"}))
+	payload, err := lease.ReadMessageContext(ctx)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"message":"after-prewarm"}`, string(payload))
+	result, err := svc.DisconnectAccount(ctx, 1, time.Second)
+	require.NoError(t, err)
+	require.True(t, result.Drained, "%+v", result)
+	require.Equal(t, 1, result.ClosedUpstreamConnections)
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("prewarmed upstream was not force-disconnected")
+	}
+}
