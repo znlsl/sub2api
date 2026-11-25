@@ -1,6 +1,12 @@
-# Sub2API v0.2.25 fork: scheduling disable and account disconnect
+# Sub2API v0.2.25 fork: scheduling disable, account disconnect and relay tier billing
 
-This fork's `v0.2.25-drainfix` branch is based exactly on the official `v0.2.25` tag at commit `348997267d756eab5729bb6b78a275a15d18796a`. The two production patches and regression tests were cherry-picked from `v0.2.24-drainfix`; the original production patch IDs are identical and there were no text conflicts. A separate follow-up moves prewarm cancellation allocation after its generation check, resolving a full-vet lostcancel finding without changing connection lifetime. Later upstream main commits are not included. The v0.2.21, v0.2.22, v0.2.23 and v0.2.24 fork branches remain separate and unchanged.
+This fork's `v0.2.25-drainfix` branch is based exactly on the official `v0.2.25` tag at commit `348997267d756eab5729bb6b78a275a15d18796a`. The initial two production patches and regression tests were cherry-picked from `v0.2.24-drainfix`; the original production patch IDs are identical and there were no text conflicts. A separate follow-up moves prewarm cancellation allocation after its generation check, resolving a full-vet lostcancel finding without changing connection lifetime. Later upstream main commits are not included. The v0.2.21, v0.2.22, v0.2.23 and v0.2.24 fork branches remain separate and unchanged.
+
+## Third maintained patch: chained Codex Fast billing (2026-11-25)
+
+The branch now also normalizes Codex OAuth client-facing `service_tier` declarations to the final outbound processing tier when the Codex echo is `default`, `auto` or missing. This prevents an API-key relay, including a loopback relay into another group on the same instance, from mistaking that placeholder for a genuine Standard downgrade. It does not change the canonical billing rules, raw upstream observations, group multipliers, Free Fast discounts or public API downgrade handling.
+
+See [SERVICE_TIER_RELAY_FIX.md](SERVICE_TIER_RELAY_FIX.md) for the causal chain, HTTP/WS boundaries, upstream PR provenance and current validation. The graceful scheduling toggle and explicit disconnect endpoint retain their original behavior. No new configuration switch, database migration or `multi_browser_rotation` change is required. Future upstream ports must retain these three behavioral requirements until each is incorporated upstream; do not apply an already-merged patch twice.
 
 ## Behavior
 
